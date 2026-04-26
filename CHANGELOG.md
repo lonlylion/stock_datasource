@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/lonlylion/stock_datasource/compare/v1.0.0...v1.1.0) (2026-04-26)
+
+
+### Features
+
+* add portfolio transactions, K-line patterns and improve system logs ([182a345](https://github.com/lonlylion/stock_datasource/commit/182a3458f3b06fe1972b1f306740b3e6eb654829))
+
 ## 1.0.0 (2026-04-23)
 
 

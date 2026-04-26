@@ -7,6 +7,7 @@ import request from '@/utils/request'
 import DataEmptyGuide from '@/components/DataEmptyGuide.vue'
 import StockDetailDialog from '@/components/StockDetailDialog.vue'
 import type { BrokerProfile } from '@/api/profile'
+import type { Transaction } from '@/types/portfolio'
 import { isTradingTime } from '@/composables/useRealtimePolling'
 
 const portfolioStore = usePortfolioStore()
@@ -287,6 +288,17 @@ const positionColumns = [
   { colKey: 'operation', title: '操作', width: 80 }
 ]
 
+const transactionColumns = [
+  { colKey: 'transaction_date', title: '日期', width: 100 },
+  { colKey: 'ts_code', title: '代码', width: 100 },
+  { colKey: 'stock_name', title: '名称', width: 90 },
+  { colKey: 'transaction_type', title: '类型', width: 70 },
+  { colKey: 'quantity', title: '数量', width: 70 },
+  { colKey: 'price', title: '价格', width: 85 },
+  { colKey: 'realized_pl', title: '已实现盈亏', width: 100 },
+  { colKey: 'notes', title: '备注', width: 150 }
+]
+
 const watchlistColumns = [
   { colKey: 'ts_code', title: '代码', width: 100 },
   { colKey: 'stock_name', title: '名称', width: 100 },
@@ -354,6 +366,7 @@ const refreshData = () => {
   portfolioStore.fetchPositions()
   portfolioStore.fetchSummary()
   portfolioStore.fetchAnalysis()
+  portfolioStore.fetchTransactions()
 }
 
 onMounted(() => {
@@ -561,7 +574,34 @@ onUnmounted(() => {
           <DataEmptyGuide v-if="!memoryStore.watchlist?.length" description="暂无自选股，可通过智能对话添加" :show-guide="false" />
         </t-tab-panel>
 
-        <!-- Tab 3: Investment Profile -->
+        <!-- Tab 3: Transactions -->
+        <t-tab-panel value="transactions" label="交易记录">
+          <t-table
+            :data="portfolioStore.transactions"
+            :columns="transactionColumns"
+            :loading="portfolioStore.loading"
+            row-key="id"
+            size="small"
+          >
+            <template #transaction_type="{ row }">
+              <t-tag :theme="row.transaction_type === 'buy' ? 'danger' : 'success'" size="small">
+                {{ row.transaction_type === 'buy' ? '买入' : '卖出' }}
+              </t-tag>
+            </template>
+            <template #price="{ row }">
+              {{ formatMoney(row.price, 3) }}
+            </template>
+            <template #realized_pl="{ row }">
+              <span v-if="row.realized_pl != null" :style="{ color: row.realized_pl >= 0 ? '#e34d59' : '#00a870' }">
+                {{ formatMoney(row.realized_pl) }}
+              </span>
+              <span v-else style="color: #999">-</span>
+            </template>
+          </t-table>
+          <DataEmptyGuide v-if="!portfolioStore.transactions?.length" description="暂无交易记录" :show-guide="false" />
+        </t-tab-panel>
+
+        <!-- Tab 4: Investment Profile -->
         <t-tab-panel value="profile" label="投资偏好">
           <t-row :gutter="16">
             <t-col :span="4">

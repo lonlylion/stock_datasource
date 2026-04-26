@@ -10,6 +10,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Optional
 
 from stock_datasource.config.settings import settings
 
@@ -20,7 +21,6 @@ def _get_db_client():
     """Lazy import to avoid circular imports at module load time."""
     try:
         from stock_datasource.models.database import db_client
-
         return db_client
     except Exception:
         return None
@@ -39,13 +39,12 @@ def _transform_record(record: dict) -> dict:
         "line": int(record.get("line", 0)),
         "message": record.get("message", ""),
         "exception": record.get("exception") or None,
-        "middleware_trace_id": record.get("middleware_trace_id")
-        or extra.get("middleware_trace_id", "-"),
+        "middleware_trace_id": record.get("middleware_trace_id") or extra.get("middleware_trace_id", "-"),
         "extra": json.dumps(extra, ensure_ascii=False, default=str),
     }
 
 
-def _flush_batch(batch: list[dict]) -> None:
+def _flush_batch(batch: List[Dict]) -> None:
     """Insert a batch of records into ClickHouse."""
     if not batch:
         return
@@ -54,7 +53,6 @@ def _flush_batch(batch: list[dict]) -> None:
         return
     try:
         import pandas as pd
-
         df = pd.DataFrame(batch)
         db.insert_dataframe("system_structured_logs", df)
     except Exception:
@@ -67,12 +65,12 @@ def _import_file(filepath: Path) -> bool:
 
     Returns True if file was successfully imported (and deleted), False otherwise.
     """
-    batch: list[dict] = []
+    batch: List[Dict] = []
     batch_size = settings.LOG_CH_SINK_BATCH_SIZE
     imported = 0
 
     try:
-        with open(filepath, encoding="utf-8", errors="ignore") as f:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -104,7 +102,7 @@ def _import_file(filepath: Path) -> bool:
         return False
 
 
-def _rotate_active_jsonl(logs_dir: Path) -> Path | None:
+def _rotate_active_jsonl(logs_dir: Path) -> Optional[Path]:
     """Rename the active JSONL file into an importable snapshot.
 
     The logger writes one line at a time and reopens the file per write, so an
@@ -154,7 +152,6 @@ def start_ch_sink_watcher(logs_dir: Path, interval: float = 30.0) -> threading.T
     Returns:
         The started daemon thread.
     """
-
     def _watcher():
         while True:
             try:

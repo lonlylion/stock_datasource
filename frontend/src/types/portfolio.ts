@@ -97,3 +97,48 @@ export interface ProfitHistoryItem {
   total_cost: number
   total_profit: number
 }
+
+export interface Transaction {
+  id: string
+  user_id: string
+  ts_code: string
+  stock_name: string
+  transaction_type: 'buy' | 'sell'
+  quantity: number
+  price: number
+  transaction_date: string
+  position_id: string
+  realized_pl: number | null
+  notes: string
+  profile_id: string
+  created_at: string | null
+}
+
+export interface CreateTransactionRequest {
+  ts_code: string
+  quantity: number
+  price: number
+  transaction_date: string
+  notes?: string
+  profile_id?: string
+}
+
+export interface TransactionSignal {
+  id: string
+  ts_code: string
+  signal_type: 'buy' | 'sell'
+  source: 'user' | 'strategy'
+  signal_date: string
+  price: number
+  quantity?: number
+  strategy_name?: string
+  notes?: string
+}
+
+export interface KlinePattern {
+  name: string
+  name_en: string
+  date: string
+  type: 'bullish' | 'bearish' | 'neutral'
+  category: 'single' | 'dual' | 'triple'
+}

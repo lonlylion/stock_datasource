@@ -118,22 +118,47 @@ const buildSignalMarkPoint = (signals: any[] | undefined, dates: string[]) => {
   const sellPoints: any[] = []
   
   for (const signal of signals) {
-    const dateStr = signal.date || signal.trade_date
-    const dateIndex = dates.indexOf(dateStr)
+    const dateStr = signal.date || signal.trade_date || signal.signal_date
+    // Try exact match, then YYYY-MM-DD format match
+    let dateIndex = dates.indexOf(dateStr)
+    if (dateIndex < 0 && dateStr && dateStr.length >= 10) {
+      dateIndex = dates.indexOf(dateStr.substring(0, 10))
+    }
     if (dateIndex < 0) continue
     
     const signalType = (signal.signal_type || signal.type || '').toLowerCase()
+    const source = signal.source || 'strategy'
+    const isUser = source === 'user'
+    
     if (signalType.includes('buy') || signalType === 'b' || signalType === 'golden_cross' || signalType === 'oversold') {
       buyPoints.push({
-        coord: [dateStr, signal.price || signal.close],
-        value: 'B',
-        itemStyle: { color: '#e74c3c' }
+        coord: [dates[dateIndex], signal.price || signal.close],
+        value: isUser ? '买' : 'B',
+        itemStyle: { color: isUser ? '#f5222d' : '#e74c3c' },
+        symbol: isUser ? 'triangle' : 'pin',
+        symbolSize: isUser ? 20 : 30,
+        label: {
+          show: true,
+          fontSize: isUser ? 9 : 10,
+          fontWeight: 'bold',
+          color: '#fff',
+          formatter: (params: any) => params.value
+        }
       })
     } else if (signalType.includes('sell') || signalType === 's' || signalType === 'death_cross' || signalType === 'overbought') {
       sellPoints.push({
-        coord: [dateStr, signal.price || signal.close],
-        value: 'S',
-        itemStyle: { color: '#2ecc71' }
+        coord: [dates[dateIndex], signal.price || signal.close],
+        value: isUser ? '卖' : 'S',
+        itemStyle: { color: isUser ? '#52c41a' : '#2ecc71' },
+        symbol: isUser ? 'triangle' : 'pin',
+        symbolSize: isUser ? 20 : 30,
+        label: {
+          show: true,
+          fontSize: isUser ? 9 : 10,
+          fontWeight: 'bold',
+          color: '#fff',
+          formatter: (params: any) => params.value
+        }
       })
     }
   }

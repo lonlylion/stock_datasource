@@ -18,6 +18,7 @@ logs/
 .DS_Store
 .codebuddy
 .vscode
+uv.lock
 node_modules
 runtime_config.json
 .idea
@@ -51,4 +52,3 @@ src/stock_datasource/modules/auth/auth.db
 
 # Frontend build info (regenerated)
 frontend/tsconfig.tsbuildinfo
-.deploy-backup/

@@ -2,13 +2,14 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { portfolioApi } from '@/api/portfolio'
 import { profileApi } from '@/api/profile'
-import type { Position, PortfolioSummary, AnalysisReport, CreatePositionRequest } from '@/types/portfolio'
+import type { Position, PortfolioSummary, AnalysisReport, CreatePositionRequest, Transaction, CreateTransactionRequest } from '@/types/portfolio'
 import type { BrokerProfile } from '@/api/profile'
 
 export const usePortfolioStore = defineStore('portfolio', () => {
   const positions = ref<Position[]>([])
   const summary = ref<PortfolioSummary | null>(null)
   const analysis = ref<AnalysisReport | null>(null)
+  const transactions = ref<Transaction[]>([])
   const loading = ref(false)
 
   // Profile state
@@ -134,10 +135,53 @@ export const usePortfolioStore = defineStore('portfolio', () => {
     await fetchProfiles()
   }
 
+  // ---- Transaction actions ----
+  const buyTransaction = async (data: CreateTransactionRequest) => {
+    loading.value = true
+    try {
+      const payload = { ...data }
+      if (activeProfileId.value && !payload.profile_id) {
+        payload.profile_id = activeProfileId.value
+      }
+      await portfolioApi.buyTransaction(payload)
+      await Promise.all([fetchPositions(), fetchSummary(), fetchTransactions()])
+    } finally {
+      loading.value = false
+    }
+  }
+
+  const sellTransaction = async (data: CreateTransactionRequest) => {
+    loading.value = true
+    try {
+      const payload = { ...data }
+      if (activeProfileId.value && !payload.profile_id) {
+        payload.profile_id = activeProfileId.value
+      }
+      await portfolioApi.sellTransaction(payload)
+      await Promise.all([fetchPositions(), fetchSummary(), fetchTransactions()])
+    } finally {
+      loading.value = false
+    }
+  }
+
+  const fetchTransactions = async (params?: { ts_code?: string; start_date?: string; end_date?: string; profile_id?: string }) => {
+    try {
+      const queryParams: Record<string, string> = { ...params } as Record<string, string>
+      if (activeProfileId.value) {
+        queryParams.profile_id = activeProfileId.value
+      }
+      const response = await portfolioApi.getTransactions(queryParams)
+      transactions.value = Array.isArray(response) ? response : []
+    } catch (e) {
+      transactions.value = []
+    }
+  }
+
   return {
     positions,
     summary,
     analysis,
+    transactions,
     loading,
     profiles,
     activeProfileId,
@@ -151,6 +195,9 @@ export const usePortfolioStore = defineStore('portfolio', () => {
     setActiveProfile,
     createProfile,
     updateProfile,
-    deleteProfile
+    deleteProfile,
+    buyTransaction,
+    sellTransaction,
+    fetchTransactions
   }
 })

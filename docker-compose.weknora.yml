@@ -33,6 +33,7 @@ services:
       # Redis
       REDIS_HOST: weknora-redis
       REDIS_PORT: 6379
+      REDIS_ADDR: weknora-redis:6379
       REDIS_PASSWORD: ${WEKNORA_REDIS_PASSWORD:-}
       STREAM_MANAGER_TYPE: redis
       # Vector store
@@ -72,8 +73,9 @@ services:
     ports:
       - "${WEKNORA_FRONTEND_PORT:-18881}:80"
     environment:
-      BACKEND_HOST: weknora-app
-      BACKEND_PORT: 8080
+      APP_HOST: weknora-app
+      APP_PORT: 8080
+      APP_SCHEME: http
     networks:
       - weknora-network
     depends_on:

@@ -4,11 +4,38 @@ import logging
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
+from enum import Enum
 from typing import Any
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+
+class TransactionType(Enum):
+    """Transaction type enum."""
+
+    BUY = "buy"
+    SELL = "sell"
+
+
+@dataclass
+class Transaction:
+    """Transaction record for buy/sell operations."""
+
+    id: str
+    user_id: str = "default_user"
+    ts_code: str = ""
+    stock_name: str = ""
+    transaction_type: str = "buy"  # 'buy' or 'sell'
+    quantity: int = 0
+    price: float = 0.0
+    transaction_date: str = ""
+    position_id: str = ""
+    realized_pl: float | None = None
+    notes: str = ""
+    profile_id: str = "default"
+    created_at: datetime | None = None
 
 
 @dataclass
@@ -34,6 +61,7 @@ class Position:
     industry: str | None = None
     last_price_update: datetime | None = None
     is_active: bool = True
+    profile_id: str = "default"
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -84,6 +112,7 @@ class EnhancedPortfolioService:
         self._db = None
         # In-memory storage for demo (should be replaced with database)
         self._positions: dict[str, Position] = {}
+        self._transactions: dict[str, Transaction] = {}
         self._alerts: dict[str, PositionAlert] = {}
 
         # Add some sample data
@@ -271,6 +300,260 @@ class EnhancedPortfolioService:
 
         logger.info(f"Position {position_id} added: {ts_code}")
         return position
+
+    async def record_buy_transaction(
+        self,
+        user_id: str,
+        ts_code: str,
+        quantity: int,
+        price: float,
+        transaction_date: str,
+        notes: str | None = None,
+        profile_id: str = "default",
+    ) -> Transaction:
+        """Record a buy transaction and update/create the corresponding position.
+
+        If an active position for this user+ts_code+profile_id exists, the
+        position's cost_price is updated to the weighted average and quantity
+        is increased.  Otherwise a new Position is created.
+        """
+        # Find existing active position
+        existing_position = None
+        for pos in self._positions.values():
+            if (
+                pos.user_id == user_id
+                and pos.ts_code == ts_code
+                and pos.profile_id == profile_id
+                and pos.is_active
+            ):
+                existing_position = pos
+                break
+
+        # Get stock name
+        stock_name, sector, industry = await self._get_stock_info(ts_code)
+
+        if existing_position:
+            # Update existing position with weighted average cost
+            new_cost = self._calc_weighted_average_cost(
+                old_quantity=existing_position.quantity,
+                old_cost=existing_position.cost_price,
+                new_quantity=quantity,
+                new_price=price,
+            )
+            existing_position.quantity += quantity
+            existing_position.cost_price = round(new_cost, 4)
+            existing_position.updated_at = datetime.now()
+            position_id = existing_position.id
+
+            # Save to DB if available
+            await self._save_position(existing_position)
+        else:
+            # Create new position
+            position_id = str(uuid.uuid4())
+            new_position = Position(
+                id=position_id,
+                user_id=user_id,
+                ts_code=ts_code,
+                stock_name=stock_name,
+                quantity=quantity,
+                cost_price=price,
+                buy_date=transaction_date,
+                notes=notes or "",
+                sector=sector,
+                industry=industry,
+                profile_id=profile_id,
+                is_active=True,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+            await self._update_position_prices(new_position)
+            await self._save_position(new_position)
+
+        # Create transaction record
+        txn_id = str(uuid.uuid4())
+        transaction = Transaction(
+            id=txn_id,
+            user_id=user_id,
+            ts_code=ts_code,
+            stock_name=stock_name,
+            transaction_type="buy",
+            quantity=quantity,
+            price=price,
+            transaction_date=transaction_date,
+            position_id=position_id,
+            realized_pl=None,
+            notes=notes or "",
+            profile_id=profile_id,
+            created_at=datetime.now(),
+        )
+
+        # Persist transaction
+        self._transactions[txn_id] = transaction
+        await self._save_transaction(transaction)
+
+        logger.info(f"Buy transaction {txn_id}: {ts_code} x{quantity} @ {price}")
+        return transaction
+
+    async def record_sell_transaction(
+        self,
+        user_id: str,
+        ts_code: str,
+        quantity: int,
+        price: float,
+        transaction_date: str,
+        notes: str | None = None,
+        profile_id: str = "default",
+    ) -> Transaction:
+        """Record a sell transaction and update the corresponding position.
+
+        Validates that the user has enough shares to sell, computes realized
+        P/L, and reduces the position quantity.  If all shares are sold the
+        position is marked as inactive.
+        """
+        # Find active position
+        existing_position = None
+        for pos in self._positions.values():
+            if (
+                pos.user_id == user_id
+                and pos.ts_code == ts_code
+                and pos.profile_id == profile_id
+                and pos.is_active
+            ):
+                existing_position = pos
+                break
+
+        if not existing_position:
+            raise ValueError(
+                f"No active position found for {ts_code} "
+                f"(user={user_id}, profile={profile_id})"
+            )
+
+        # Validate sell quantity
+        self._validate_sell_quantity(existing_position.quantity, quantity)
+
+        # Calculate realized P/L
+        realized_pl = self._calc_realized_pl(
+            quantity=quantity, sell_price=price, cost_price=existing_position.cost_price
+        )
+
+        # Update position
+        existing_position.quantity -= quantity
+        existing_position.updated_at = datetime.now()
+
+        if existing_position.quantity == 0:
+            existing_position.is_active = False
+
+        # Save position
+        await self._save_position(existing_position)
+
+        # Create transaction record
+        txn_id = str(uuid.uuid4())
+        transaction = Transaction(
+            id=txn_id,
+            user_id=user_id,
+            ts_code=ts_code,
+            stock_name=existing_position.stock_name,
+            transaction_type="sell",
+            quantity=quantity,
+            price=price,
+            transaction_date=transaction_date,
+            position_id=existing_position.id,
+            realized_pl=realized_pl,
+            notes=notes or "",
+            profile_id=profile_id,
+            created_at=datetime.now(),
+        )
+
+        # Persist transaction
+        self._transactions[txn_id] = transaction
+        await self._save_transaction(transaction)
+
+        logger.info(
+            f"Sell transaction {txn_id}: {ts_code} x{quantity} @ {price}, "
+            f"realized_pl={realized_pl}"
+        )
+        return transaction
+
+    async def get_transactions(
+        self,
+        user_id: str,
+        ts_code: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        profile_id: str | None = None,
+    ) -> list[Transaction]:
+        """Get transaction history for a user with optional filters.
+
+        Returns transactions ordered by transaction_date DESC.
+        """
+        # Try database first
+        try:
+            if self.db is not None:
+                where_parts = ["user_id = %(user_id)s"]
+                params: dict[str, Any] = {"user_id": user_id}
+
+                if ts_code:
+                    where_parts.append("ts_code = %(ts_code)s")
+                    params["ts_code"] = ts_code
+                if start_date:
+                    where_parts.append("transaction_date >= %(start_date)s")
+                    params["start_date"] = start_date
+                if end_date:
+                    where_parts.append("transaction_date <= %(end_date)s")
+                    params["end_date"] = end_date
+                if profile_id:
+                    where_parts.append("profile_id = %(profile_id)s")
+                    params["profile_id"] = profile_id
+
+                where_clause = " AND ".join(where_parts)
+                query = f"""
+                    SELECT id, user_id, ts_code, stock_name, transaction_type,
+                           quantity, price, transaction_date, position_id,
+                           realized_pl, notes, profile_id, created_at
+                    FROM user_transactions
+                    WHERE {where_clause}
+                    ORDER BY transaction_date DESC
+                """
+                df = self.db.execute_query(query, params)
+                if not df.empty:
+                    transactions = []
+                    for _, row in df.iterrows():
+                        txn = Transaction(
+                            id=str(row["id"]),
+                            user_id=str(row["user_id"]),
+                            ts_code=row["ts_code"],
+                            stock_name=row["stock_name"],
+                            transaction_type=str(row["transaction_type"]),
+                            quantity=int(row["quantity"]),
+                            price=float(row["price"]),
+                            transaction_date=str(row["transaction_date"]),
+                            position_id=str(row.get("position_id", "")),
+                            realized_pl=float(row["realized_pl"])
+                            if pd.notna(row.get("realized_pl"))
+                            else None,
+                            notes=row.get("notes", ""),
+                            profile_id=str(row.get("profile_id", "default")),
+                            created_at=row["created_at"]
+                            if pd.notna(row.get("created_at"))
+                            else None,
+                        )
+                        transactions.append(txn)
+                    return transactions
+        except Exception as e:
+            logger.warning(f"Failed to get transactions from database: {e}")
+
+        # Fallback to in-memory storage
+        results = [
+            t
+            for t in self._transactions.values()
+            if t.user_id == user_id
+            and (ts_code is None or t.ts_code == ts_code)
+            and (start_date is None or t.transaction_date >= start_date)
+            and (end_date is None or t.transaction_date <= end_date)
+            and (profile_id is None or t.profile_id == profile_id)
+        ]
+        results.sort(key=lambda t: t.transaction_date, reverse=True)
+        return results
 
     async def update_position(
         self, position_id: str, user_id: str, **updates
@@ -560,6 +843,79 @@ class EnhancedPortfolioService:
 
         return triggered_alerts
 
+    async def get_kline_patterns(
+        self, ts_code: str, days: int = 60
+    ) -> list[dict[str, str]]:
+        """Detect candlestick patterns in K-line data for a stock.
+
+        Fetches OHLC data from ClickHouse, converts to Candle objects,
+        and runs detect_patterns() to find recognized patterns.
+
+        Returns a list of dicts with keys: name, name_en, date, type, category.
+        """
+        from .kline_patterns import Candle, detect_patterns
+
+        candles = await self._fetch_kline_candles(ts_code, days)
+        if not candles:
+            return []
+        return detect_patterns(candles)
+
+    async def _fetch_kline_candles(
+        self, ts_code: str, days: int
+    ) -> list:
+        """Fetch OHLC data from ClickHouse and convert to Candle objects."""
+        from .kline_patterns import Candle
+
+        if self.db is None:
+            return []
+
+        try:
+            # Determine which table to query based on ts_code suffix
+            if ts_code.endswith(".HK"):
+                table = "ods_hk_daily"
+            elif any(
+                ts_code.startswith(p)
+                for p in ("51", "15", "56", "59", "16", "50", "52", "58")
+            ):
+                table = "ods_etf_fund_daily"
+            else:
+                table = "ods_daily"
+
+            query = f"""
+                SELECT trade_date, open, high, low, close, vol
+                FROM {table}
+                WHERE ts_code = %(code)s
+                ORDER BY trade_date DESC
+                LIMIT %(limit)s
+            """
+            df = self.db.execute_query(query, {"code": ts_code, "limit": days})
+            if df.empty:
+                return []
+
+            # Convert to list of Candle objects (oldest first for pattern detection)
+            candles = []
+            for _, row in df[::-1].iterrows():
+                trade_date = row["trade_date"]
+                if hasattr(trade_date, "strftime"):
+                    date_str = trade_date.strftime("%Y-%m-%d")
+                else:
+                    date_str = str(trade_date)
+
+                candles.append(
+                    Candle(
+                        date=date_str,
+                        open=float(row["open"]),
+                        close=float(row["close"]),
+                        high=float(row["high"]),
+                        low=float(row["low"]),
+                        volume=float(row["vol"]) if pd.notna(row["vol"]) else 0,
+                    )
+                )
+            return candles
+        except Exception as e:
+            logger.warning(f"Failed to fetch kline candles for {ts_code}: {e}")
+            return []
+
     # Private helper methods
     async def _get_stock_info(self, ts_code: str) -> tuple[str, str, str]:
         """Get stock name, sector and industry. Supports A-shares, ETFs and HK stocks."""
@@ -803,6 +1159,41 @@ class EnhancedPortfolioService:
             position.daily_pct_chg = position.daily_change / position.prev_close * 100
 
     @staticmethod
+    def _calc_weighted_average_cost(
+        old_quantity: int, old_cost: float, new_quantity: int, new_price: float
+    ) -> float:
+        """Calculate weighted average cost after a new buy.
+
+        Formula: (old_qty * old_cost + new_qty * new_price) / (old_qty + new_qty)
+        If old_quantity is 0, returns new_price directly.
+        """
+        total_quantity = old_quantity + new_quantity
+        if total_quantity == 0:
+            return 0.0
+        if old_quantity == 0:
+            return new_price
+        return (old_quantity * old_cost + new_quantity * new_price) / total_quantity
+
+    @staticmethod
+    def _calc_realized_pl(quantity: int, sell_price: float, cost_price: float) -> float:
+        """Calculate realized profit/loss for a sell transaction.
+
+        Formula: quantity * (sell_price - cost_price)
+        """
+        return quantity * (sell_price - cost_price)
+
+    @staticmethod
+    def _validate_sell_quantity(held_quantity: int, sell_quantity: int) -> None:
+        """Validate that sell quantity does not exceed held quantity.
+
+        Raises ValueError if sell_quantity > held_quantity or sell_quantity == 0.
+        """
+        if sell_quantity <= 0 or sell_quantity > held_quantity:
+            raise ValueError(
+                f"Cannot sell {sell_quantity} shares; only {held_quantity} held"
+            )
+
+    @staticmethod
     def _parse_daily_trade_date(trade_date, market_type: str = "a_stock") -> datetime:
         """将日线 trade_date 转换为带收盘时间的 datetime。"""
         if hasattr(trade_date, "strftime"):
@@ -837,6 +1228,25 @@ class EnhancedPortfolioService:
 
         # Always save to in-memory storage as backup
         self._positions[position.id] = position
+
+    async def _save_transaction(self, transaction: Transaction):
+        """Save transaction to database and memory."""
+        try:
+            if self.db is not None:
+                query = """
+                    INSERT INTO user_transactions
+                    (id, user_id, ts_code, stock_name, transaction_type, quantity,
+                     price, transaction_date, position_id, realized_pl, notes,
+                     profile_id, created_at)
+                    VALUES (%(id)s, %(user_id)s, %(ts_code)s, %(stock_name)s,
+                            %(transaction_type)s, %(quantity)s, %(price)s,
+                            %(transaction_date)s, %(position_id)s, %(realized_pl)s,
+                            %(notes)s, %(profile_id)s, %(created_at)s)
+                """
+                params = asdict(transaction)
+                self.db.execute(query, params)
+        except Exception as e:
+            logger.warning(f"Failed to save transaction to database: {e}")
 
     async def _record_position_history(self, position: Position, change_type: str):
         """Record position change in history table."""

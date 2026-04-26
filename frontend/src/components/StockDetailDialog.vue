@@ -5,12 +5,14 @@ import { marketApi } from '@/api/market'
 import type { KLineResponse } from '@/api/market'
 import { usePortfolioStore } from '@/stores/portfolio'
 import { useScreenerStore } from '@/stores/screener'
+import { portfolioApi } from '@/api/portfolio'
 import KLineChart from '@/components/charts/KLineChart.vue'
 import ChipDistributionChart from '@/components/charts/ChipDistributionChart.vue'
 import IndicatorPanel from '@/views/market/components/IndicatorPanel.vue'
 import TrendAnalysis from '@/views/market/components/TrendAnalysis.vue'
 import type { KLineData, TechnicalSignal, ChipData, ChipStats } from '@/types/common'
 import type { StockProfile } from '@/api/screener'
+import type { KlinePattern } from '@/types/portfolio'
 
 interface Props {
   visible: boolean
@@ -32,6 +34,7 @@ const klineData = ref<KLineData[]>([])
 const indicators = ref<Record<string, number[]>>({})
 const indicatorDates = ref<string[]>([])
 const signals = ref<TechnicalSignal[]>([])
+const transactionSignals = ref<any[]>([])
 const trendAnalysis = ref<any>(null)
 const loading = ref(false)
 const chartLoading = ref(false)
@@ -61,11 +64,16 @@ const adjustType = ref<'qfq' | 'hfq' | 'none'>('qfq')
 const selectedIndicators = ref<string[]>(['MA', 'MACD', 'RSI', 'KDJ'])
 const chartMode = ref<'daily' | 'minute'>('daily') // 日K / 分钟K切换
 
-// Add to watchlist form
-const addToWatchlistForm = ref({
+// K-line pattern recognition
+const klinePatterns = ref<KlinePattern[]>([])
+const klinePatternsLoading = ref(false)
+
+// Transaction form
+const transactionType = ref<'buy' | 'sell'>('buy')
+const transactionForm = ref({
   quantity: 100,
-  cost_price: 0,
-  buy_date: new Date().toISOString().split('T')[0],
+  price: 0,
+  transaction_date: new Date().toISOString().split('T')[0],
   notes: ''
 })
 
@@ -176,11 +184,17 @@ const fetchStockData = async () => {
       await triggerBackfill()
     }
     
-    // Set default cost price to latest close price
-    addToWatchlistForm.value.cost_price = latestPrice.value
+    // Set default transaction price to latest close price
+    transactionForm.value.price = latestPrice.value
     
     // Fetch indicators
     await fetchIndicators()
+    
+    // Fetch transaction signals for B/S markers
+    fetchTransactionSignals()
+    
+    // Fetch K-line patterns
+    fetchKlinePatterns()
     
   } catch (error) {
     console.error('Failed to fetch stock data:', error)
@@ -207,6 +221,58 @@ const fetchIndicators = async () => {
     console.error('Failed to fetch indicators:', error)
   }
 }
+
+// Fetch transaction signals (user buy/sell + strategy signals) for B/S markers
+const fetchTransactionSignals = async () => {
+  if (!props.stockCode) return
+  
+  try {
+    const response = await portfolioApi.getTransactionSignals({
+      ts_code: props.stockCode
+    })
+    transactionSignals.value = Array.isArray(response) ? response : []
+  } catch (error) {
+    transactionSignals.value = []
+  }
+}
+
+// Fetch K-line candlestick patterns
+const fetchKlinePatterns = async () => {
+  if (!props.stockCode) return
+  
+  klinePatternsLoading.value = true
+  try {
+    const response = await portfolioApi.getKlinePatterns(props.stockCode, period.value)
+    klinePatterns.value = Array.isArray(response) ? response : []
+  } catch (error) {
+    console.error('Failed to fetch kline patterns:', error)
+    klinePatterns.value = []
+  } finally {
+    klinePatternsLoading.value = false
+  }
+}
+
+// Group patterns by date for display
+const patternsByDate = computed(() => {
+  const grouped: Record<string, KlinePattern[]> = {}
+  for (const p of klinePatterns.value) {
+    if (!grouped[p.date]) grouped[p.date] = []
+    grouped[p.date].push(p)
+  }
+  // Sort dates descending (most recent first)
+  return Object.entries(grouped)
+    .sort(([a], [b]) => b.localeCompare(a))
+    .map(([date, patterns]) => ({ date, patterns }))
+})
+
+// Combined signals for K-line chart: merge technical + transaction signals
+const combinedSignals = computed(() => {
+  const technical = signals.value.map(s => ({
+    ...s,
+    source: 'strategy' as const
+  }))
+  return [...technical, ...transactionSignals.value]
+})
 
 // Fetch realtime minute K-line data
 const fetchMinuteKline = async () => {
@@ -387,23 +453,29 @@ const handleAIAnalyze = () => {
   }
 }
 
-const handleAddToWatchlist = async () => {
+const handleTransaction = async () => {
   if (!stockInfo.value) return
   
   try {
-    await portfolioStore.addPosition({
+    const data = {
       ts_code: stockInfo.value.code,
-      quantity: addToWatchlistForm.value.quantity,
-      cost_price: addToWatchlistForm.value.cost_price,
-      buy_date: addToWatchlistForm.value.buy_date,
-      notes: addToWatchlistForm.value.notes || `从智能选股添加 - ${stockInfo.value.name}`
-    })
+      quantity: transactionForm.value.quantity,
+      price: transactionForm.value.price,
+      transaction_date: transactionForm.value.transaction_date,
+      notes: transactionForm.value.notes || `${transactionType.value === 'buy' ? '买入' : '卖出'} - ${stockInfo.value.name}`
+    }
     
-    MessagePlugin.success(`已将 ${stockInfo.value.name} 添加到自选股`)
-    emit('close')
-  } catch (error) {
-    console.error('Failed to add to watchlist:', error)
-    MessagePlugin.error('添加自选股失败')
+    if (transactionType.value === 'buy') {
+      await portfolioStore.buyTransaction(data)
+    } else {
+      await portfolioStore.sellTransaction(data)
+    }
+    
+    MessagePlugin.success(`${transactionType.value === 'buy' ? '买入' : '卖出'} ${stockInfo.value.name} 记录成功`)
+  } catch (error: any) {
+    console.error('Failed to record transaction:', error)
+    const msg = error?.response?.data?.detail || '交易记录失败'
+    MessagePlugin.error(msg)
   }
 }
 
@@ -496,6 +568,8 @@ watch(() => props.stockCode, (newCode) => {
     indicators.value = {}
     indicatorDates.value = []
     signals.value = []
+    transactionSignals.value = []
+    klinePatterns.value = []
     trendAnalysis.value = null
     chipData.value = []
     chipStats.value = null
@@ -701,27 +775,38 @@ watch(() => props.visible, (visible) => {
               :data="chartMode === 'minute' ? minuteKlineData : klineData"
               :indicators="chartMode === 'minute' ? {} : indicators"
               :indicator-dates="chartMode === 'minute' ? [] : indicatorDates"
-              :signals="chartMode === 'minute' ? [] : signals"
+              :signals="chartMode === 'minute' ? [] : combinedSignals"
               :loading="chartMode === 'minute' ? minuteKlineLoading : chartLoading"
               height="100%"
             />
           </div>
           
-          <!-- Add to Watchlist -->
-          <t-card title="加入自选" class="watchlist-card" :bordered="false">
-            <t-form :data="addToWatchlistForm" layout="inline" class="watchlist-form">
+          <!-- Buy/Sell Transaction -->
+          <t-card title="交易记录" class="watchlist-card" :bordered="false">
+            <t-form :data="transactionForm" layout="inline" class="watchlist-form">
+              <t-form-item label="类型" name="type">
+                <t-radio-group v-model="transactionType" variant="default-filled" size="small">
+                  <t-radio-button value="buy">
+                    <span style="color: #f5222d">买入</span>
+                  </t-radio-button>
+                  <t-radio-button value="sell">
+                    <span style="color: #52c41a">卖出</span>
+                  </t-radio-button>
+                </t-radio-group>
+              </t-form-item>
+              
               <t-form-item label="股数" name="quantity">
                 <t-input-number
-                  v-model="addToWatchlistForm.quantity"
+                  v-model="transactionForm.quantity"
                   :min="1"
                   :step="100"
                   style="width: 120px"
                 />
               </t-form-item>
               
-              <t-form-item label="成本价" name="cost_price">
+              <t-form-item label="价格" name="price">
                 <t-input-number
-                  v-model="addToWatchlistForm.cost_price"
+                  v-model="transactionForm.price"
                   :min="0"
                   :step="0.001"
                   :decimal-places="3"
@@ -729,16 +814,16 @@ watch(() => props.visible, (visible) => {
                 />
               </t-form-item>
               
-              <t-form-item label="买入日期" name="buy_date">
+              <t-form-item label="日期" name="transaction_date">
                 <t-date-picker
-                  v-model="addToWatchlistForm.buy_date"
+                  v-model="transactionForm.transaction_date"
                   style="width: 140px"
                 />
               </t-form-item>
               
               <t-form-item label="备注" name="notes">
                 <t-input
-                  v-model="addToWatchlistForm.notes"
+                  v-model="transactionForm.notes"
                   placeholder="可选"
                   style="width: 160px"
                 />
@@ -746,12 +831,12 @@ watch(() => props.visible, (visible) => {
               
               <t-form-item>
                 <t-button
-                  theme="primary"
+                  :theme="transactionType === 'buy' ? 'danger' : 'success'"
                   :loading="portfolioStore.loading"
-                  @click="handleAddToWatchlist"
+                  @click="handleTransaction"
                 >
-                  <template #icon><t-icon name="star" /></template>
-                  加入自选
+                  <template #icon><t-icon :name="transactionType === 'buy' ? 'arrow-down' : 'arrow-up'" /></template>
+                  {{ transactionType === 'buy' ? '买入' : '卖出' }}
                 </t-button>
               </t-form-item>
             </t-form>
@@ -780,6 +865,38 @@ watch(() => props.visible, (visible) => {
               :status="analysisStatus"
               class="trend-analysis-compact"
             />
+          </t-card>
+          
+          <!-- K-line Pattern Recognition -->
+          <t-card class="pattern-card" :bordered="false">
+            <template #header>
+              <div class="pattern-card-header">
+                <span>K线形态</span>
+                <t-button size="small" variant="text" @click="fetchKlinePatterns" :loading="klinePatternsLoading">
+                  <t-icon name="refresh" />
+                </t-button>
+              </div>
+            </template>
+            
+            <t-loading v-if="klinePatternsLoading" size="small" />
+            <div v-else-if="patternsByDate.length > 0" class="pattern-list">
+              <div v-for="group in patternsByDate" :key="group.date" class="pattern-group">
+                <div class="pattern-date">{{ group.date }}</div>
+                <div class="pattern-items">
+                  <t-tag
+                    v-for="pattern in group.patterns"
+                    :key="pattern.name_en"
+                    :theme="pattern.type === 'bullish' ? 'success' : pattern.type === 'bearish' ? 'danger' : 'default'"
+                    variant="light"
+                    size="small"
+                    class="pattern-tag"
+                  >
+                    {{ pattern.name }}
+                  </t-tag>
+                </div>
+              </div>
+            </div>
+            <t-empty v-else description="未检测到K线形态" size="small" />
           </t-card>
         </div>
       </div>
@@ -1123,6 +1240,58 @@ watch(() => props.visible, (visible) => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+/* Pattern Card */
+.pattern-card {
+  background: #fafafa;
+  flex-shrink: 0;
+  max-height: 240px;
+  display: flex;
+  flex-direction: column;
+}
+
+.pattern-card :deep(.t-card__body) {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.pattern-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.pattern-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pattern-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.pattern-date {
+  font-size: 11px;
+  color: #999;
+  white-space: nowrap;
+  min-width: 70px;
+  padding-top: 2px;
+}
+
+.pattern-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pattern-tag {
+  font-size: 11px;
 }
 </style>
 

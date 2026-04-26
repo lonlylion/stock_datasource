@@ -72,6 +72,46 @@ class UpdatePositionRequest(BaseModel):
     notes: str | None = Field(None, description="备注")
 
 
+class BuyTransactionRequest(BaseModel):
+    """Request model for buy transaction."""
+
+    ts_code: str = Field(..., description="股票代码")
+    quantity: int = Field(..., gt=0, description="买入数量")
+    price: float = Field(..., gt=0, description="买入价格")
+    transaction_date: str = Field(..., description="交易日期")
+    notes: str | None = Field(None, description="备注")
+    profile_id: str | None = Field(None, description="账户ID")
+
+
+class SellTransactionRequest(BaseModel):
+    """Request model for sell transaction."""
+
+    ts_code: str = Field(..., description="股票代码")
+    quantity: int = Field(..., gt=0, description="卖出数量")
+    price: float = Field(..., gt=0, description="卖出价格")
+    transaction_date: str = Field(..., description="交易日期")
+    notes: str | None = Field(None, description="备注")
+    profile_id: str | None = Field(None, description="账户ID")
+
+
+class TransactionResponse(BaseModel):
+    """Response model for transaction."""
+
+    id: str
+    user_id: str
+    ts_code: str
+    stock_name: str
+    transaction_type: str
+    quantity: int
+    price: float
+    transaction_date: str
+    position_id: str
+    realized_pl: float | None = None
+    notes: str = ""
+    profile_id: str = "default"
+    created_at: str | None = None
+
+
 class PortfolioSummary(BaseModel):
     total_value: float
     total_cost: float
@@ -542,3 +582,298 @@ async def batch_update_prices(current_user: dict = Depends(get_current_user)):
             "success": False,
             "error": str(e),
         }
+
+
+# ---------------------------------------------------------------------------
+# Transaction endpoints (buy/sell transaction history)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/transactions/buy", response_model=TransactionResponse)
+async def buy_transaction(
+    request: BuyTransactionRequest, current_user: dict = Depends(get_current_user)
+):
+    """Record a buy transaction and update/create position.
+
+    User isolation: Transaction is recorded under the authenticated user's account.
+    """
+    try:
+        enhanced_service = get_enhanced_portfolio_service()
+        if not enhanced_service:
+            raise HTTPException(status_code=503, detail="Enhanced service not available")
+
+        txn = await enhanced_service.record_buy_transaction(
+            user_id=current_user["id"],
+            ts_code=request.ts_code,
+            quantity=request.quantity,
+            price=request.price,
+            transaction_date=request.transaction_date,
+            notes=request.notes,
+            profile_id=request.profile_id or "default",
+        )
+
+        return TransactionResponse(
+            id=txn.id,
+            user_id=txn.user_id,
+            ts_code=txn.ts_code,
+            stock_name=txn.stock_name,
+            transaction_type=txn.transaction_type,
+            quantity=txn.quantity,
+            price=txn.price,
+            transaction_date=txn.transaction_date,
+            position_id=txn.position_id,
+            realized_pl=txn.realized_pl,
+            notes=txn.notes,
+            profile_id=txn.profile_id,
+            created_at=str(txn.created_at) if txn.created_at else None,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to record buy transaction: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/transactions/sell", response_model=TransactionResponse)
+async def sell_transaction(
+    request: SellTransactionRequest, current_user: dict = Depends(get_current_user)
+):
+    """Record a sell transaction and update position.
+
+    User isolation: Transaction is recorded under the authenticated user's account.
+    Validates that the user has sufficient shares to sell.
+    """
+    try:
+        enhanced_service = get_enhanced_portfolio_service()
+        if not enhanced_service:
+            raise HTTPException(status_code=503, detail="Enhanced service not available")
+
+        txn = await enhanced_service.record_sell_transaction(
+            user_id=current_user["id"],
+            ts_code=request.ts_code,
+            quantity=request.quantity,
+            price=request.price,
+            transaction_date=request.transaction_date,
+            notes=request.notes,
+            profile_id=request.profile_id or "default",
+        )
+
+        return TransactionResponse(
+            id=txn.id,
+            user_id=txn.user_id,
+            ts_code=txn.ts_code,
+            stock_name=txn.stock_name,
+            transaction_type=txn.transaction_type,
+            quantity=txn.quantity,
+            price=txn.price,
+            transaction_date=txn.transaction_date,
+            position_id=txn.position_id,
+            realized_pl=txn.realized_pl,
+            notes=txn.notes,
+            profile_id=txn.profile_id,
+            created_at=str(txn.created_at) if txn.created_at else None,
+        )
+    except ValueError as e:
+        logger.warning(f"Sell validation failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to record sell transaction: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/transactions", response_model=list[TransactionResponse])
+async def get_transactions(
+    ts_code: str | None = Query(None, description="Filter by stock code"),
+    start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
+    profile_id: str | None = Query(None, description="Filter by profile ID"),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get transaction history for the authenticated user.
+
+    User isolation: Only returns transactions belonging to the authenticated user.
+    Supports filtering by stock code and date range.
+    """
+    try:
+        enhanced_service = get_enhanced_portfolio_service()
+        if not enhanced_service:
+            raise HTTPException(status_code=503, detail="Enhanced service not available")
+
+        transactions = await enhanced_service.get_transactions(
+            user_id=current_user["id"],
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date,
+            profile_id=profile_id,
+        )
+
+        return [
+            TransactionResponse(
+                id=txn.id,
+                user_id=txn.user_id,
+                ts_code=txn.ts_code,
+                stock_name=txn.stock_name,
+                transaction_type=txn.transaction_type,
+                quantity=txn.quantity,
+                price=txn.price,
+                transaction_date=txn.transaction_date,
+                position_id=txn.position_id,
+                realized_pl=txn.realized_pl,
+                notes=txn.notes,
+                profile_id=txn.profile_id,
+                created_at=str(txn.created_at) if txn.created_at else None,
+            )
+            for txn in transactions
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get transactions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class TransactionSignalResponse(BaseModel):
+    """A buy/sell signal point for K-line chart markers."""
+    id: str
+    ts_code: str
+    signal_type: str = Field(..., description="'buy' or 'sell'")
+    source: str = Field(..., description="'user' or 'strategy'")
+    signal_date: str
+    price: float
+    quantity: int | None = None
+    strategy_name: str | None = None
+    notes: str | None = None
+
+
+@router.get("/transactions/signals", response_model=list[TransactionSignalResponse])
+async def get_transaction_signals(
+    ts_code: str = Query(..., description="Stock code (required)"),
+    start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get buy/sell signal points for K-line chart markers.
+
+    Combines:
+    - User transaction signals (actual buy/sell records)
+    - Technical strategy signals (from indicator analysis)
+
+    Returns a unified list of signals suitable for rendering B/S markers
+    on K-line charts with different styles per source.
+    """
+    try:
+        enhanced_service = get_enhanced_portfolio_service()
+        if not enhanced_service:
+            raise HTTPException(status_code=503, detail="Enhanced service not available")
+
+        signals: list[TransactionSignalResponse] = []
+
+        # 1. User transaction signals
+        transactions = await enhanced_service.get_transactions(
+            user_id=current_user["id"],
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        for txn in transactions:
+            signals.append(TransactionSignalResponse(
+                id=f"user_{txn.id}",
+                ts_code=txn.ts_code,
+                signal_type=txn.transaction_type,
+                source="user",
+                signal_date=txn.transaction_date,
+                price=txn.price,
+                quantity=txn.quantity,
+                notes=f"{txn.transaction_type.upper()} {txn.quantity}@{txn.price}",
+            ))
+
+        # 2. Strategy signals from technical indicators
+        try:
+            indicators = await enhanced_service.get_technical_indicators(ts_code, 180)
+            strategy_signals = _extract_strategy_signals(ts_code, indicators)
+            signals.extend(strategy_signals)
+        except Exception as e:
+            logger.debug(f"Strategy signals not available for {ts_code}: {e}")
+
+        # Sort by signal_date
+        signals.sort(key=lambda s: s.signal_date)
+
+        return signals
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get transaction signals: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class KlinePatternResponse(BaseModel):
+    """A detected candlestick pattern."""
+    name: str = Field(..., description="Pattern name (Chinese)")
+    name_en: str = Field(..., description="Pattern name (English)")
+    date: str = Field(..., description="Date of the pattern (last candle)")
+    type: str = Field(..., description="'bullish', 'bearish', or 'neutral'")
+    category: str = Field(..., description="'single', 'dual', or 'triple'")
+
+
+@router.get("/kline-patterns/{ts_code}", response_model=list[KlinePatternResponse])
+async def get_kline_patterns(
+    ts_code: str = Path(..., description="Stock code"),
+    days: int = Query(default=60, description="Number of days to analyze"),
+    current_user: dict = Depends(get_current_user),
+):
+    """Detect candlestick patterns in K-line data for a stock.
+
+    Fetches OHLC data and runs pattern recognition to identify
+    single, dual, and triple candlestick patterns.
+    """
+    try:
+        enhanced_service = get_enhanced_portfolio_service()
+        if not enhanced_service:
+            raise HTTPException(status_code=503, detail="Enhanced service not available")
+
+        patterns = await enhanced_service.get_kline_patterns(ts_code, days)
+        return [
+            KlinePatternResponse(
+                name=p["name"],
+                name_en=p["name_en"],
+                date=p["date"],
+                type=p["type"],
+                category=p["category"],
+            )
+            for p in patterns
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get kline patterns for {ts_code}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _extract_strategy_signals(
+    ts_code: str, indicators: dict
+) -> list[TransactionSignalResponse]:
+    """Extract buy/sell signals from technical indicator data.
+
+    Converts technical signals (MACD crossover, RSI overbought/oversold, etc.)
+    into TransactionSignalResponse items with source='strategy'.
+    """
+    signals: list[TransactionSignalResponse] = []
+    signals_data = indicators.get("signals", [])
+
+    for idx, sig in enumerate(signals_data):
+        signal_type = "buy" if sig.get("type") in ("buy", "golden_cross", "oversold") else "sell"
+        signals.append(TransactionSignalResponse(
+            id=f"strategy_{idx}",
+            ts_code=ts_code,
+            signal_type=signal_type,
+            source="strategy",
+            signal_date=sig.get("date", ""),
+            price=float(sig.get("price", 0)),
+            strategy_name=sig.get("name", sig.get("type", "technical")),
+            notes=sig.get("message", ""),
+        ))
+
+    return signals

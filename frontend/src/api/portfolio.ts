@@ -1,11 +1,15 @@
 import request from '@/utils/request'
-import type { 
-  Position, 
-  PortfolioSummary, 
+import type {
+  Position,
+  PortfolioSummary,
   CreatePositionRequest,
   UpdatePositionRequest,
   AnalysisReport,
-  AlertCreateRequest
+  AlertCreateRequest,
+  Transaction,
+  CreateTransactionRequest,
+  TransactionSignal,
+  KlinePattern
 } from '@/types/portfolio'
 
 export const portfolioApi = {
@@ -68,5 +72,28 @@ export const portfolioApi = {
   // Batch operations
   batchUpdatePrices() {
     return request.post('/api/portfolio/batch/update-prices')
+  },
+
+  // Transactions
+  buyTransaction(data: CreateTransactionRequest) {
+    return request.post<Transaction>('/api/portfolio/transactions/buy', data)
+  },
+
+  sellTransaction(data: CreateTransactionRequest) {
+    return request.post<Transaction>('/api/portfolio/transactions/sell', data)
+  },
+
+  getTransactions(params?: { ts_code?: string; start_date?: string; end_date?: string; profile_id?: string }) {
+    return request.get<Transaction[]>('/api/portfolio/transactions', { params })
+  },
+
+  // Transaction signals for K-line markers
+  getTransactionSignals(params: { ts_code: string; start_date?: string; end_date?: string }) {
+    return request.get<TransactionSignal[]>('/api/portfolio/transactions/signals', { params })
+  },
+
+  // K-line candlestick patterns
+  getKlinePatterns(tsCode: string, days: number = 60) {
+    return request.get<KlinePattern[]>(`/api/portfolio/kline-patterns/${tsCode}`, { params: { days } })
   }
 }

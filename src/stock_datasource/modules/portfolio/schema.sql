@@ -113,6 +113,26 @@ ORDER BY (user_id, ts_code, alert_type, id)
 PARTITION BY toYYYYMM(created_at)
 SETTINGS index_granularity = 8192;
 
+-- User transactions table (buy/sell transaction history)
+CREATE TABLE IF NOT EXISTS user_transactions (
+    id String,
+    user_id String DEFAULT 'default_user',
+    ts_code String,
+    stock_name String,
+    transaction_type Enum8('buy' = 1, 'sell' = 2),
+    quantity UInt32,
+    price Decimal(10, 3),
+    transaction_date Date,
+    position_id String DEFAULT '',
+    realized_pl Nullable(Decimal(15, 2)),
+    notes String DEFAULT '',
+    profile_id String DEFAULT 'default',
+    created_at DateTime DEFAULT now()
+) ENGINE = MergeTree()
+ORDER BY (user_id, ts_code, transaction_date, id)
+PARTITION BY toYYYYMM(transaction_date)
+SETTINGS index_granularity = 8192;
+
 -- Performance optimization views and materialized views
 
 -- Daily portfolio summary materialized view

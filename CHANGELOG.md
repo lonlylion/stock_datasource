@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.2.0](https://github.com/lonlylion/stock_datasource/compare/v1.1.0...v1.2.0) (2026-05-15)
+
+
+### Features
+
+* Agent中心 — 可配置化Agent平台 + Agent Teams层级编排 ([032d83f](https://github.com/lonlylion/stock_datasource/commit/032d83f39562db2da76c74531db22c81b0d95a81))
+* 新增哨兵体系(Sentinel System) — 分层式异常驱动投资决策Agent架构 ([858fcf0](https://github.com/lonlylion/stock_datasource/commit/858fcf0d341929ee68508f21e81115a7d3116f0b))
+* 添加哨兵选股前端页面和后端路由注册 ([6c53086](https://github.com/lonlylion/stock_datasource/commit/6c5308697fad3eb8fda69531a43e41f40d828c47))
+
+
+### Bug Fixes
+
+* 修复 docker-compose 一键部署的 4 个阻塞问题 ([e704dc4](https://github.com/lonlylion/stock_datasource/commit/e704dc4fad4aa3ce891d11c61b32ab7399302524))
+* 修复每日同步三个阻塞问题 ([93f6e45](https://github.com/lonlylion/stock_datasource/commit/93f6e45397d50ca275c73a3e1945dbe64534a1f3))
+
 ## [1.1.0](https://github.com/lonlylion/stock_datasource/compare/v1.0.0...v1.1.0) (2026-04-26)
 
 
